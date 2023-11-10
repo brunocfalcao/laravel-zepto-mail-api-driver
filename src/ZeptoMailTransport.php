@@ -2,69 +2,105 @@
 
 namespace Brunocfalcao\ZeptoMailApiDriver;
 
-use Illuminate\Mail\Transport\Transport;
-use Swift_Mime_SimpleMessage;
+use Symfony\Component\Mailer\SentMessage;
+use Symfony\Component\Mailer\Transport\AbstractTransport;
+use Symfony\Component\Mime\Address;
+use Symfony\Component\Mime\Email as SymfonyEmail;
+use Symfony\Component\Mime\MessageConverter;
 
-class ZeptoMailTransport extends Transport
+class ZeptoMailTransport extends AbstractTransport
 {
     protected $key;
 
-    public function __construct($key)
+    public function __construct(string $key)
     {
+        parent::__construct();
+
         $this->key = $key;
     }
 
-    public function send(Swift_Mime_SimpleMessage $message, &$failedRecipients = null)
+    public function __toString(): string
     {
-        $from = $message->getFrom();
-        $to = $message->getTo();
-        $subject = $message->getSubject();
-        $body = $message->getBody();
-        // Additional processing for attachments, etc.
-
-        $response = $this->sendViaZeptoMail($from, $to, $subject, $body, $message->getChildren());
-
-        // Parse the response and handle errors
-
-        return $response;
+        return 'zeptomail';
     }
 
-    protected function sendViaZeptoMail($from, $to, $subject, $body, $attachments)
+    protected function doSend(SentMessage $message): void
     {
-        $endpoint = 'https://api.zeptomail.com/v1.1/email';
-        $headers = [
-            'Authorization: zoho-enczapikey ' . $this->key,
-            'Content-Type: application/json',
+        $symfonyEmail = MessageConverter::toEmail($message->getOriginalMessage());
+        $payload = $this->getPayload($symfonyEmail);
+
+        $this->sendViaZeptoMail($payload);
+    }
+
+    protected function getPayload(SymfonyEmail $email): array
+    {
+        $payload = [
+            'from' => [
+                'address' => $email->getFrom()[0]->getAddress(),
+                'name' => $email->getFrom()[0]->getName(),
+            ],
+            'to' => array_map(function (Address $address) {
+                return [
+                    'email_address' => [
+                        'address' => $address->getAddress(),
+                        'name' => $address->getName(),
+                    ],
+                ];
+            }, $email->getTo()),
+            'subject' => $email->getSubject(),
+            'htmlbody' => $email->getHtmlBody(),
+            'textbody' => $email->getTextBody(),
         ];
 
-        $postData = [
-            'bounce_address' => '', // Set bounce address
-            'from' => $from,
-            'to' => $to,
-            'subject' => $subject,
-            'htmlbody' => $body,
-            // Add more fields as needed, such as 'attachments' => $attachments
-        ];
-
-        // Handle attachments
+        // Attachments processing
+        $attachments = $email->getAttachments();
         if ($attachments) {
-            $postData['attachments'] = $this->processAttachments($attachments);
+            $payload['attachments'] = array_map(function ($attachment) {
+                /** @var \Symfony\Component\Mime\Part\DataPart $attachment */
+                return [
+                    'content' => base64_encode($attachment->getBody()),
+                    'name' => $attachment->getFilename(),
+                    'mime_type' => $attachment->getMediaType().'/'.$attachment->getMediaSubtype(),
+                ];
+            }, iterator_to_array($attachments));
         }
 
-        $curl = curl_init($endpoint);
-        curl_setopt($curl, CURLOPT_HTTPHEADER, $headers);
-        curl_setopt($curl, CURLOPT_POST, true);
-        curl_setopt($curl, CURLOPT_POSTFIELDS, json_encode($postData));
-        curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
-
-        $response = curl_exec($curl);
-        curl_close($curl);
-
-        return json_decode($response, true);
+        return $payload;
     }
 
-    protected function processAttachments($attachments)
+    protected function sendViaZeptoMail(array $payload): void
     {
-        // Process the attachments and encode them as needed for ZeptoMail
+        $curl = curl_init();
+
+        curl_setopt_array($curl, [
+            CURLOPT_URL => 'https://api.zeptomail.com/v1.1/email',
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_ENCODING => '',
+            CURLOPT_MAXREDIRS => 10,
+            CURLOPT_TIMEOUT => 30,
+            CURLOPT_SSLVERSION => CURL_SSLVERSION_TLSv1_2,
+            CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+            CURLOPT_CUSTOMREQUEST => 'POST',
+            CURLOPT_POSTFIELDS => json_encode($payload),
+            CURLOPT_HTTPHEADER => [
+                'Accept: application/json',
+                'Content-Type: application/json',
+                "Authorization: Zoho-enczapikey {$this->key}",
+            ],
+        ]);
+
+        $response = curl_exec($curl);
+        $err = curl_error($curl);
+
+        curl_close($curl);
+
+        if ($err) {
+            throw new \Exception('cURL Error #:'.$err);
+        }
+
+        $responseBody = json_decode($response, true);
+        if (isset($responseBody['error'])) {
+            throw new \Exception('Error sending email: '.json_encode($responseBody));
+        }
     }
 }
