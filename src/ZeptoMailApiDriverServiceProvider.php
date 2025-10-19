@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Brunocfalcao\ZeptoMailApiDriver;
 
+use Illuminate\Http\Client\Factory as HttpFactory;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\ServiceProvider;
 use InvalidArgumentException;
@@ -13,9 +14,11 @@ class ZeptoMailApiDriverServiceProvider extends ServiceProvider
     public function boot(): void
     {
         Mail::extend('zeptomail', function ($app) {
-            // Prefer config, fallback to env('ZEPTOMAIL_MAIL_KEY')
-            $key = (string) (config('services.zeptomail.mail_key') ?? '');
+            /** @var HttpFactory $http */
+            $http = $app->make(HttpFactory::class);
 
+            // Prefer config; fallback to env('ZEPTOMAIL_MAIL_KEY')
+            $key = (string) (config('services.zeptomail.mail_key') ?? '');
             if (trim($key) === '') {
                 $key = (string) env('ZEPTOMAIL_MAIL_KEY', '');
             }
@@ -29,8 +32,14 @@ class ZeptoMailApiDriverServiceProvider extends ServiceProvider
                 );
             }
 
-            // Instantiate the transport with a valid key
-            return new ZeptoMailTransport($key);
+            return new ZeptoMailTransport(
+                key: $key,
+                http: $http,
+                baseUrl: (string) config('services.zeptomail.endpoint', 'https://api.zeptomail.com'),
+                timeout: (int) config('services.zeptomail.timeout', 30),
+                retries: (int) config('services.zeptomail.retries', 2),
+                retrySleepMs: (int) config('services.zeptomail.retry_sleep_ms', 200),
+            );
         });
     }
 }

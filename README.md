@@ -4,7 +4,7 @@
 [![Total Downloads](https://img.shields.io/packagist/dt/brunocfalcao/laravel-zeptomail-driver.svg?style=flat-square)](https://packagist.org/packages/brunocfalcao/laravel-zeptomail-driver)
 
 A lightweight **Symfony Mailer transport** for Laravel that delivers mail via **ZeptoMail’s HTTP API** (no SMTP).
-It plugs into Laravel’s `mailers` and supports **CC/BCC/Reply‑To**, **attachments & inline (CID) images**, **single & batch sending**, **template sending (single & batch)**, **custom MIME headers**, **open/click tracking flags**, and a **client reference**.
+It plugs into Laravel’s `mailers` and supports **CC/BCC/Reply-To**, **attachments & inline (CID) images**, **single & batch sending**, **template sending (single & batch)**, **custom MIME headers**, **open/click tracking flags**, and a **client reference**.
 Under the hood it uses Laravel’s `Http` client, so you can **`Http::fake()`** in tests.
 
 ---
@@ -13,7 +13,7 @@ Under the hood it uses Laravel’s `Http` client, so you can **`Http::fake()`** 
 
 - PHP 8.1+
 - Laravel 9.x / 10.x / 11.x (Symfony Mailer)
-- `ext-curl` (used by Laravel HTTP client) and outbound HTTPS allowed
+- Outbound HTTPS and TLS 1.2 available
 - A ZeptoMail account & API key (use the correct **region endpoint**, e.g. `.com` or `.eu`)
 
 ---
@@ -48,9 +48,10 @@ MAIL_MAILER=zeptomail
 MAIL_FROM_ADDRESS=hello@yourdomain.com
 MAIL_FROM_NAME="Your App"
 
-ZEPTO_MAIL_KEY=your-zeptomail-api-key
+# Driver secret
+ZEPTOMAIL_MAIL_KEY=your-zeptomail-api-key
 
-# Optional (pick the one for your region):
+# Region endpoint (pick the one for your account):
 ZEPTO_MAIL_ENDPOINT=https://api.zeptomail.com
 # ZEPTO_MAIL_ENDPOINT=https://api.zeptomail.eu
 
@@ -68,6 +69,8 @@ ZEPTO_MAIL_CLIENT_REFERENCE=
 ZEPTO_MAIL_FORCE_BATCH=false
 ```
 
+> The service provider reads `config('services.zeptomail.mail_key')` and falls back to `env('ZEPTOMAIL_MAIL_KEY')`.
+
 ### 2) `config/services.php`
 
 ```php
@@ -75,12 +78,18 @@ ZEPTO_MAIL_FORCE_BATCH=false
 return [
     // ...
     'zeptomail' => [
-        'mail_key'        => env('ZEPTO_MAIL_KEY'),
-        'endpoint'        => env('ZEPTO_MAIL_ENDPOINT', 'https://api.zeptomail.com'), // use .eu if applicable
+        // Primary: configure here. Fallback: env('ZEPTOMAIL_MAIL_KEY')
+        'mail_key'        => env('ZEPTOMAIL_MAIL_KEY'),
+
+        // Use .eu if your account lives in the EU region
+        'endpoint'        => env('ZEPTO_MAIL_ENDPOINT', 'https://api.zeptomail.com'),
+
+        // HTTP client tuning
         'timeout'         => env('ZEPTO_MAIL_TIMEOUT', 30),
         'retries'         => env('ZEPTO_MAIL_RETRIES', 2),
         'retry_sleep_ms'  => env('ZEPTO_MAIL_RETRY_MS', 200),
-        // Optional defaults:
+
+        // Optional defaults for convenience
         'template_key'    => env('ZEPTO_MAIL_TEMPLATE_KEY'),
         'template_alias'  => env('ZEPTO_MAIL_TEMPLATE_ALIAS'),
         'bounce_address'  => env('ZEPTO_MAIL_BOUNCE_ADDRESS'),
@@ -139,7 +148,7 @@ Mail::to('a@example.com')->send(new InvoiceReady());
 Mail::mailer('zeptomail')->to('a@example.com')->send(new InvoiceReady());
 ```
 
-### CC / BCC / Reply‑To
+### CC / BCC / Reply-To
 
 ```php
 Mail::mailer('zeptomail')->send(
@@ -188,11 +197,11 @@ public function build()
 
 ---
 
-## Batch sending (per‑recipient personalization & hidden recipients)
+## Batch sending (per-recipient personalization & hidden recipients)
 
 Use **batch** when sending to a collection of recipients. Recipients are **not visible to each other**. You can also provide **per-recipient `merge_info`**.
 
-### Batch (non‑template)
+### Batch (non-template)
 
 ```php
 use Illuminate\Support\Facades\Mail;
@@ -228,6 +237,8 @@ Send using a **template key or alias** (single or batch). Provide **global `merg
 ### Single template email
 
 ```php
+use Illuminate\Support\Facades\Mail;
+
 Mail::to('jane@example.com')->send(
     (new App\Mail\Templated)
         ->withSymfonyMessage(function (Symfony\Component\Mime\Email $email) {
@@ -250,6 +261,8 @@ Mail::to('jane@example.com')->send(
 ### Batch template email
 
 ```php
+use Illuminate\Support\Facades\Mail;
+
 $recipients = ['a@example.com', 'b@example.com'];
 
 $perRecipient = [
@@ -311,8 +324,8 @@ Mailables work seamlessly on queues. Ensure your workers have the same `.env` va
 
 ## Troubleshooting
 
-- **401 / auth errors** → Verify the API key and that you’re using the correct regional endpoint (`.com` vs `.eu`).
-- **"error" in response JSON** → The driver throws if the Zepto response includes an `error` object; check domain/sender verification and payload shape.
+- **401 / auth errors** → Verify the key and that you’re using the correct regional endpoint (`.com` vs `.eu`).
+- **“error” in response JSON** → The driver throws if the Zepto response includes an `error` object; check domain/sender verification and payload shape.
 - **Inline images not showing** → Ensure you embed and reference the returned `cid` (`<img src="cid:{{ $cid }}">`).
 - **Recipients visibility** → Use **batch** endpoints to hide recipients; single-email endpoint can expose them.
 - **Rate limits / large sends** → Batch endpoints support a large number of recipients per request (subject to your Zepto plan). Split very large lists and back off with retries if needed.
@@ -328,7 +341,7 @@ Mailables work seamlessly on queues. Ensure your workers have the same `.env` va
   - `POST /v1.1/email/template` (template single)
   - `POST /v1.1/email/template/batch` (template batch)
 
-It also maps: from/to/cc/bcc/reply‑to, subject, html/text, attachments, inline images, `mime_headers`, tracking flags, `client_reference`, and (for templates) `merge_info` & optional `bounce_address`.
+It also maps: from/to/cc/bcc/reply-to, subject, html/text, attachments, inline images, `mime_headers`, tracking flags, `client_reference`, and (for templates) `merge_info` & optional `bounce_address`.
 
 ---
 
