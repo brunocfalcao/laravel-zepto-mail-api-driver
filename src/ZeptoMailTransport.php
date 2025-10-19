@@ -1,106 +1,485 @@
 <?php
+// src/ZeptoMailTransport.php
+
+declare(strict_types=1);
 
 namespace Brunocfalcao\ZeptoMailApiDriver;
 
+use Illuminate\Http\Client\Factory as HttpFactory;
+use Illuminate\Support\Arr;
+use Illuminate\Support\Str;
 use Symfony\Component\Mailer\SentMessage;
 use Symfony\Component\Mailer\Transport\AbstractTransport;
 use Symfony\Component\Mime\Address;
 use Symfony\Component\Mime\Email as SymfonyEmail;
 use Symfony\Component\Mime\MessageConverter;
 
+/**
+ * ZeptoMail transport for Symfony Mailer (Laravel).
+ *
+ * Implements:
+ * - Single emails:      POST /v1.1/email
+ * - Batch emails:       POST /v1.1/email/batch
+ * - Template emails:    POST /v1.1/email/template
+ * - Batch + templates:  POST /v1.1/email/template/batch
+ *
+ * API fields follow ZeptoMail docs:
+ *  - from {address,name}
+ *  - to/cc/bcc: [{ email_address: {address,name}, merge_info? }]
+ *  - reply_to: [{address,name}]
+ *  - subject, htmlbody|textbody
+ *  - attachments: [{content|file_cache_key, mime_type, name}]
+ *  - inline_images: [{content|file_cache_key, mime_type, cid}]
+ *  - track_opens, track_clicks, client_reference, mime_headers
+ *  - template_key / template_alias (+ optional bounce_address, merge_info)
+ *
+ * Batch allows per-recipient merge_info and hides recipients from each other. :contentReference[oaicite:1]{index=1}
+ */
 class ZeptoMailTransport extends AbstractTransport
 {
-    protected $key;
+    /** ZeptoMail API key (without the 'Zoho-enczapikey ' prefix) */
+    protected string $key;
 
-    public function __construct(string $key)
-    {
+    /** Base API URL (e.g. https://api.zeptomail.com or https://api.zeptomail.eu) */
+    protected string $baseUrl;
+
+    /** Laravel HTTP client (fakable) */
+    protected HttpFactory $http;
+
+    /** Default request options */
+    protected int $timeout;
+    protected int $retries;
+    protected int $retrySleepMs;
+
+    public function __construct(
+        string $key,
+        HttpFactory $http,
+        ?string $baseUrl = null,
+        ?int $timeout = null,
+        ?int $retries = null,
+        ?int $retrySleepMs = null
+    ) {
         parent::__construct();
 
-        $this->key = $key;
+        $this->key         = $key;
+        $this->http        = $http;
+        $this->baseUrl     = rtrim($baseUrl ?: (string) config('services.zeptomail.endpoint', 'https://api.zeptomail.com'), '/');
+        $this->timeout     = (int) ($timeout ?? config('services.zeptomail.timeout', 30));
+        $this->retries     = (int) ($retries ?? config('services.zeptomail.retries', 2));
+        $this->retrySleepMs= (int) ($retrySleepMs ?? config('services.zeptomail.retry_sleep_ms', 200));
     }
 
+    /**
+     * Transport name used by Laravel's mailer config.
+     */
     public function __toString(): string
     {
         return 'zeptomail';
     }
 
+    /**
+     * Entry point called by Symfony Mailer.
+     */
     protected function doSend(SentMessage $message): void
     {
-        $symfonyEmail = MessageConverter::toEmail($message->getOriginalMessage());
-        $payload = $this->getPayload($symfonyEmail);
+        /** @var SymfonyEmail $email */
+        $email = MessageConverter::toEmail($message->getOriginalMessage());
 
-        $this->sendViaZeptoMail($payload);
+        // Decide which API family to call based on presence of template key/alias and batch hints.
+        $templateKeyOrAlias = $this->extractTemplateKeyOrAlias($email);          // header X-Zepto-Template or config
+        $globalMergeInfo    = $this->extractGlobalMergeInfo($email);             // header X-Zepto-MergeInfo (JSON)
+        $perRecipientMerge  = $this->extractPerRecipientMergeInfo($email);       // header X-Zepto-PerRecipient-MergeInfo (JSON map)
+        $forceBatch         = $this->shouldForceBatch($email, $perRecipientMerge);
+
+        // Build payload following ZeptoMail schemas.
+        $payload = $this->buildCommonPayload($email);
+
+        // reply_to is an array of {address,name} (notice: not nested in email_address) :contentReference[oaicite:2]{index=2}
+        $replyTo = $this->mapReplyTo($email->getReplyTo());
+        if ($replyTo) {
+            $payload['reply_to'] = $replyTo;
+        }
+
+        // attachments & inline images (base64 OR file_cache_key) :contentReference[oaicite:3]{index=3}
+        [$attachments, $inlineImages] = $this->extractAttachments($email);
+        if ($attachments) {
+            $payload['attachments']   = $attachments;
+        }
+        if ($inlineImages) {
+            $payload['inline_images'] = $inlineImages;
+        }
+
+        // tracking flags and client reference (by headers or config) :contentReference[oaicite:4]{index=4}
+        $this->applyFlagsAndReference($email, $payload);
+
+        // mime_headers: pass-through custom headers as name => value object :contentReference[oaicite:5]{index=5}
+        $custom = $this->extractCustomHeaders($email);
+        if ($custom) {
+            $payload['mime_headers'] = $custom;
+        }
+
+        // Addressing: to/cc/bcc arrays in Zepto format
+        // For batch, allow per-recipient merge_info; for single, plain list.
+        $to  = $this->mapToWithOptionalMerge($email->getTo(), $forceBatch ? $perRecipientMerge : []);
+        $cc  = $this->mapAddresses($email->getCc());
+        $bcc = $this->mapAddresses($email->getBcc());
+        if ($to) {
+            $payload['to']  = $to;
+        }
+        if ($cc) {
+            $payload['cc']  = $cc;
+        }
+        if ($bcc) {
+            $payload['bcc'] = $bcc;
+        }
+
+        // If using template APIs
+        if ($templateKeyOrAlias) {
+            $payload = array_merge($payload, $templateKeyOrAlias);
+            // Template global merge_info (optional) :contentReference[oaicite:6]{index=6}
+            if ($globalMergeInfo) {
+                $payload['merge_info'] = $globalMergeInfo;
+            }
+            // Optional bounce address via header X-Zepto-Bounce-Address or config (templates API supports it) :contentReference[oaicite:7]{index=7}
+            if ($bounce = $this->extractBounceAddress($email)) {
+                $payload['bounce_address'] = $bounce;
+            }
+
+            $endpoint = $forceBatch
+                ? '/v1.1/email/template/batch'   // batch templates :contentReference[oaicite:8]{index=8}
+                : '/v1.1/email/template';         // single template :contentReference[oaicite:9]{index=9}
+
+            $this->postToZepto($endpoint, $payload);
+            return;
+        }
+
+        // Non-template APIs
+        $endpoint = $forceBatch
+            ? '/v1.1/email/batch'   // batch sending (supports per-recipient merge_info in "to") :contentReference[oaicite:10]{index=10}
+            : '/v1.1/email';        // single email (all recipients visible to each other) :contentReference[oaicite:11]{index=11}
+
+        $this->postToZepto($endpoint, $payload);
     }
 
-    protected function getPayload(SymfonyEmail $email): array
+    /**
+     * Build fields common to all four endpoints.
+     */
+    protected function buildCommonPayload(SymfonyEmail $email): array
     {
-        $payload = [
-            'from' => [
-                'address' => $email->getFrom()[0]->getAddress(),
-                'name' => $email->getFrom()[0]->getName(),
-            ],
-            'to' => array_map(function (Address $address) {
-                return [
-                    'email_address' => [
-                        'address' => $address->getAddress(),
-                        'name' => $address->getName(),
-                    ],
-                ];
-            }, $email->getTo()),
-            'subject' => $email->getSubject(),
+        $from = $email->getFrom()[0] ?? null;
+
+        return array_filter([
+            'from' => $from ? [
+                'address' => $from->getAddress(),
+                'name'    => $from->getName(),
+            ] : null,
+            'subject'  => $email->getSubject(),
+            // Zepto requires either htmlbody OR textbody (one of them). We pass both if available; server will accept at least one. :contentReference[oaicite:12]{index=12}
             'htmlbody' => $email->getHtmlBody(),
             'textbody' => $email->getTextBody(),
-        ];
-
-        // Attachments processing
-        $attachments = $email->getAttachments();
-        if ($attachments) {
-            $payload['attachments'] = array_map(function ($attachment) {
-                /** @var \Symfony\Component\Mime\Part\DataPart $attachment */
-                return [
-                    'content' => base64_encode($attachment->getBody()),
-                    'name' => $attachment->getFilename(),
-                    'mime_type' => $attachment->getMediaType().'/'.$attachment->getMediaSubtype(),
-                ];
-            }, iterator_to_array($attachments));
-        }
-
-        return $payload;
+        ], static fn ($v) => !is_null($v) && $v !== '');
     }
 
-    protected function sendViaZeptoMail(array $payload): void
+    /**
+     * Map standard recipients to Zepto format:
+     *   [{ "email_address": { "address": "...", "name": "..." } }]
+     */
+    protected function mapAddresses(array $addresses): array
     {
-        $curl = curl_init();
+        return array_values(array_map(static function (Address $a) {
+            return [
+                'email_address' => [
+                    'address' => $a->getAddress(),
+                    'name'    => $a->getName(),
+                ],
+            ];
+        }, $addresses));
+    }
 
-        curl_setopt_array($curl, [
-            CURLOPT_URL => 'https://api.zeptomail.com/v1.1/email',
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_ENCODING => '',
-            CURLOPT_MAXREDIRS => 10,
-            CURLOPT_TIMEOUT => 30,
-            CURLOPT_SSLVERSION => CURL_SSLVERSION_TLSv1_2,
-            CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
-            CURLOPT_CUSTOMREQUEST => 'POST',
-            CURLOPT_POSTFIELDS => json_encode($payload),
-            CURLOPT_HTTPHEADER => [
-                'Accept: application/json',
-                'Content-Type: application/json',
-                "Authorization: Zoho-enczapikey {$this->key}",
-            ],
-        ]);
+    /**
+     * For batch endpoints, allow per-recipient merge_info:
+     *   [{ email_address: {...}, merge_info: {...}? }]
+     * Map merge map by recipient email address.
+     */
+    protected function mapToWithOptionalMerge(array $addresses, array $perRecipientMerge): array
+    {
+        return array_values(array_map(function (Address $a) use ($perRecipientMerge) {
+            $item = [
+                'email_address' => [
+                    'address' => $a->getAddress(),
+                    'name'    => $a->getName(),
+                ],
+            ];
 
-        $response = curl_exec($curl);
-        $err = curl_error($curl);
+            if (isset($perRecipientMerge[$a->getAddress()]) && is_array($perRecipientMerge[$a->getAddress()])) {
+                $item['merge_info'] = $perRecipientMerge[$a->getAddress()];
+            }
 
-        curl_close($curl);
+            return $item;
+        }, $addresses));
+    }
 
-        if ($err) {
-            throw new \Exception('cURL Error #:'.$err);
+    /**
+     * reply_to: array of {address,name} (not wrapped in email_address). :contentReference[oaicite:13]{index=13}
+     */
+    protected function mapReplyTo(array $replyTo): array
+    {
+        return array_values(array_map(static function (Address $a) {
+            return [
+                'address' => $a->getAddress(),
+                'name'    => $a->getName(),
+            ];
+        }, $replyTo));
+    }
+
+    /**
+     * Extract attachments and inline (CID) images per Zepto spec. :contentReference[oaicite:14]{index=14}
+     */
+    protected function extractAttachments(SymfonyEmail $email): array
+    {
+        $attachments  = [];
+        $inlineImages = [];
+
+        foreach (iterator_to_array($email->getAttachments()) as $part) {
+            /** @var \Symfony\Component\Mime\Part\DataPart $part */
+            $filename = method_exists($part, 'getFilename') ? $part->getFilename() : null;
+            $mimeType = $part->getMediaType().'/'.$part->getMediaSubtype();
+            $raw      = (string) $part->getBody();
+            $b64      = base64_encode($raw);
+
+            $headers  = $part->getPreparedHeaders();
+            $cd       = $headers->get('Content-Disposition');
+            $cidH     = $headers->get('Content-ID');
+
+            $isInline = false;
+            if ($cd && Str::contains(strtolower((string) $cd->getBodyAsString()), 'inline')) {
+                $isInline = true;
+            }
+
+            $cid = null;
+            if ($cidH) {
+                $cid = trim((string) $cidH->getBodyAsString(), '<>');
+                $isInline = true;
+            }
+
+            $payload = array_filter([
+                'content'   => $b64,
+                'mime_type' => $mimeType,
+                'name'      => $filename,
+            ], fn ($v) => !is_null($v) && $v !== '');
+
+            if ($isInline) {
+                if ($cid) {
+                    $payload['cid'] = $cid; // referenced as <img src="cid:...">
+                }
+                $inlineImages[] = $payload;
+            } else {
+                $attachments[] = $payload;
+            }
         }
 
-        $responseBody = json_decode($response, true);
-        if (isset($responseBody['error'])) {
-            throw new \Exception('Error sending email: '.json_encode($responseBody));
+        return [$attachments, $inlineImages];
+    }
+
+    /**
+     * Pull template_key or template_alias from headers or config.
+     * Supported headers:
+     *   - X-Zepto-Template: (string) key or alias
+     * Config fallback: services.zeptomail.template_key or template_alias.
+     */
+    protected function extractTemplateKeyOrAlias(SymfonyEmail $email): ?array
+    {
+        $h = $email->getHeaders();
+        if ($h->has('X-Zepto-Template')) {
+            $val = trim((string) $h->get('X-Zepto-Template')->getBodyAsString());
+            if ($val !== '') {
+                // Allow users to pass either a key or an alias; Zepto accepts either field name. :contentReference[oaicite:15]{index=15}
+                $field = Str::startsWith($val, 'ea') ? 'template_key' : 'template_alias';
+                return [$field => $val];
+            }
+        }
+
+        $key   = (string) (config('services.zeptomail.template_key')   ?? '');
+        $alias = (string) (config('services.zeptomail.template_alias') ?? '');
+
+        if ($key !== '') {
+            return ['template_key'   => $key];
+        }
+        if ($alias !== '') {
+            return ['template_alias' => $alias];
+        }
+
+        return null;
+    }
+
+    /**
+     * Global merge variables (applies to email outside per-recipient merges).
+     * Header: X-Zepto-MergeInfo: JSON object
+     */
+    protected function extractGlobalMergeInfo(SymfonyEmail $email): ?array
+    {
+        $h = $email->getHeaders();
+        if (!$h->has('X-Zepto-MergeInfo')) {
+            return null;
+        }
+
+        $json = (string) $h->get('X-Zepto-MergeInfo')->getBodyAsString();
+        $decoded = json_decode($json, true);
+        return is_array($decoded) ? $decoded : null;
+    }
+
+    /**
+     * Per-recipient merge map:
+     * Header: X-Zepto-PerRecipient-MergeInfo: JSON object mapping
+     *   { "alice@example.com": {...}, "bob@example.com": {...} }
+     */
+    protected function extractPerRecipientMergeInfo(SymfonyEmail $email): array
+    {
+        $h = $email->getHeaders();
+        if (!$h->has('X-Zepto-PerRecipient-MergeInfo')) {
+            return [];
+        }
+
+        $json = (string) $h->get('X-Zepto-PerRecipient-MergeInfo')->getBodyAsString();
+        $decoded = json_decode($json, true);
+        return is_array($decoded) ? $decoded : [];
+    }
+
+    /**
+     * Optional bounce address (templates API supports it). :contentReference[oaicite:16]{index=16}
+     * Header: X-Zepto-Bounce-Address
+     * Config: services.zeptomail.bounce_address
+     */
+    protected function extractBounceAddress(SymfonyEmail $email): ?string
+    {
+        $h = $email->getHeaders();
+        if ($h->has('X-Zepto-Bounce-Address')) {
+            $val = trim((string) $h->get('X-Zepto-Bounce-Address')->getBodyAsString());
+            if ($val !== '') {
+                return $val;
+            }
+        }
+
+        $cfg = (string) (config('services.zeptomail.bounce_address') ?? '');
+        return $cfg !== '' ? $cfg : null;
+    }
+
+    /**
+     * Decide when to use batch:
+     *  - Header X-Zepto-Batch: true|1
+     *  - Config services.zeptomail.force_batch = true
+     *  - Presence of per-recipient merge info (required for per-recipient personalization) :contentReference[oaicite:17]{index=17}
+     */
+    protected function shouldForceBatch(SymfonyEmail $email, array $perRecipientMerge): bool
+    {
+        $h = $email->getHeaders();
+        if ($h->has('X-Zepto-Batch')) {
+            $val = strtolower(trim((string) $h->get('X-Zepto-Batch')->getBodyAsString()));
+            if (in_array($val, ['1', 'true', 'yes', 'on'], true)) {
+                return true;
+            }
+        }
+
+        if (config('services.zeptomail.force_batch')) {
+            return true;
+        }
+
+        return !empty($perRecipientMerge);
+    }
+
+    /**
+     * Apply tracking flags and client reference from headers or config.
+     * Headers:
+     *  - X-Zepto-Track-Opens: true|false
+     *  - X-Zepto-Track-Clicks: true|false
+     *  - X-Zepto-Client-Reference: string
+     */
+    protected function applyFlagsAndReference(SymfonyEmail $email, array &$payload): void
+    {
+        $h = $email->getHeaders();
+
+        $trackOpens  = $h->has('X-Zepto-Track-Opens')  ? filter_var((string) $h->get('X-Zepto-Track-Opens')->getBodyAsString(), FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) : null;
+        $trackClicks = $h->has('X-Zepto-Track-Clicks') ? filter_var((string) $h->get('X-Zepto-Track-Clicks')->getBodyAsString(), FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) : null;
+        $clientRef   = $h->has('X-Zepto-Client-Reference') ? trim((string) $h->get('X-Zepto-Client-Reference')->getBodyAsString()) : null;
+
+        if (is_null($trackOpens)) {
+            $trackOpens = config('services.zeptomail.track_opens');
+        }
+        if (is_null($trackClicks)) {
+            $trackClicks = config('services.zeptomail.track_clicks');
+        }
+        if (empty($clientRef)) {
+            $clientRef = config('services.zeptomail.client_reference');
+        }
+
+        if (!is_null($trackOpens)) {
+            $payload['track_opens']  = (bool) $trackOpens;
+        }
+        if (!is_null($trackClicks)) {
+            $payload['track_clicks'] = (bool) $trackClicks;
+        }
+        if (!empty($clientRef)) {
+            $payload['client_reference'] = (string) $clientRef;
+        }
+    }
+
+    /**
+     * Extract custom headers to send as mime_headers (name => value).
+     * Excludes standard addressing and our control headers.
+     */
+    protected function extractCustomHeaders(SymfonyEmail $email): array
+    {
+        $exclude = [
+            'From','To','Cc','Bcc','Reply-To','Subject',
+            'MIME-Version','Content-Type','Content-Transfer-Encoding',
+            // our control headers
+            'X-Zepto-Template','X-Zepto-MergeInfo','X-Zepto-PerRecipient-MergeInfo',
+            'X-Zepto-Batch','X-Zepto-Track-Opens','X-Zepto-Track-Clicks','X-Zepto-Client-Reference',
+            'X-Zepto-Bounce-Address',
+        ];
+
+        $pairs = [];
+        foreach ($email->getHeaders()->all() as $header) {
+            $name = $header->getName();
+            if (in_array($name, $exclude, true)) {
+                continue;
+            }
+            $val = trim((string) $header->getBodyAsString());
+            if ($val === '') {
+                continue;
+            }
+            if (isset($pairs[$name])) {
+                $pairs[$name] .= ', '.$val;
+            } else {
+                $pairs[$name] = $val;
+            }
+        }
+
+        return $pairs;
+    }
+
+    /**
+     * Perform the POST using Laravel's HTTP client (fakable).
+     * Throws on non-2xx; also throws if Zepto returns an "error" object. :contentReference[oaicite:18]{index=18}
+     */
+    protected function postToZepto(string $path, array $payload): void
+    {
+        $response = $this->http
+            ->baseUrl($this->baseUrl)
+            ->acceptJson()
+            ->asJson()
+            ->withHeaders([
+                'Authorization' => 'Zoho-enczapikey '.$this->key,
+            ])
+            ->timeout($this->timeout)
+            ->retry($this->retries, $this->retrySleepMs)
+            ->post($path, $payload);
+
+        $response->throw();
+
+        $body = $response->json();
+        if (is_array($body) && Arr::has($body, 'error')) {
+            throw new \RuntimeException('Error sending email: '.json_encode($body));
         }
     }
 }
