@@ -75,7 +75,7 @@ ZEPTO_MAIL_FORCE_BATCH=false
 return [
     // ...
     'zeptomail' => [
-        'key'             => env('ZEPTO_MAIL_KEY'),
+        'mail_key'        => env('ZEPTO_MAIL_KEY'),
         'endpoint'        => env('ZEPTO_MAIL_ENDPOINT', 'https://api.zeptomail.com'), // use .eu if applicable
         'timeout'         => env('ZEPTO_MAIL_TIMEOUT', 30),
         'retries'         => env('ZEPTO_MAIL_RETRIES', 2),
