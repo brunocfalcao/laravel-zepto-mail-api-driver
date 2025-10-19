@@ -1,167 +1,262 @@
-<p align="center"><img src="https://assets.waygou.com/flame-github-header.jpg" width="180"></p>
+# Laravel ZeptoMail API Driver
 
-<p align="center">
-<a href="https://packagist.org/packages/brunocfalcao/flame"><img src="https://poser.pugx.org/brunocfalcao/flame/v/stable.svg" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/brunocfalcao/flame"><img src="https://poser.pugx.org/brunocfalcao/flame/license.svg" alt="License"></a>
-<a href="https://github.styleci.io/repos/145177976"><img src="https://github.styleci.io/repos/145177976/shield" alt="Style CI"></a>
-</p>
+[![Latest Version on Packagist](https://img.shields.io/packagist/v/brunocfalcao/laravel-zeptomail-driver.svg?style=flat-square)](https://packagist.org/packages/brunocfalcao/laravel-zeptomail-driver)
+[![Total Downloads](https://img.shields.io/packagist/dt/brunocfalcao/laravel-zeptomail-driver.svg?style=flat-square)](https://packagist.org/packages/brunocfalcao/laravel-zeptomail-driver)
 
-## About Flame
+A lightweight **Symfony Mailer transport** for Laravel that delivers mail via **ZeptoMail’s HTTP API** (no SMTP).
+It plugs into Laravel’s `mailers` just like any first-party transport.
 
-Flame is a Feature Development-driven framework that will improve the way you structure and
-develop your Laravel application features.
+---
 
-This free package will allow you to:
-* Create your features organized in a standard code-convention way, each of them inside a directory.
-* Create and re-use "intelligent" widgets, called Twinkles, that will make you improve your layout code structure.
-* Render Panels and Twinkles automatically given the route action that it's being called at a request.
-* Be able to execute Twinkle controller actions prior to its rendering on the screen.
-* Structure your application as feature modules, having a much better code readability, structure and reusability!
+## Requirements
 
-## Why Flame
+- PHP 8.1+
+- Laravel 9.x / 10.x / 11.x (uses Symfony Mailer)
+- `ext-curl` enabled (the driver uses cURL under the hood)
+- A ZeptoMail account & API key
 
-I've built Flame because I was starting to have medium size web apps (like [Laraning](https://www.laraning.com) or [Laraflash](https://www.laraflash.com)) with a lot of Blade views, Blade Components, etc.
-It was starting to be difficult to organize my features in a way that I could load data inside those views given for the respective controller action that I was running at a certain moment.
-
-> A thought came to me: "What if I have a way to know automatically what actions am I running and then automatically load my graphical
-layout accordingly to that action, reusing the layout and not just create more and more views?"
-
-That's where Flame started. Flame will automate this behaviour for you. Let's see how.
+---
 
 ## Installation
 
-You can install this package via composer using this command:
+Install via Composer:
 
 ```bash
-composer require brunocfalcao/flame
+composer require brunocfalcao/laravel-zeptomail-driver
 ```
 
-###### The package will automatically register itself (using [auto-discover](https://laravel-news.com/package-auto-discovery)).
+> **Not on Packagist yet?**
+> Add a [VCS or path repository](https://getcomposer.org/doc/05-repositories.md) to your `composer.json` and then `composer require brunocfalcao/laravel-zeptomail-driver:*`.
 
-Next step is to publish the flame.php configuration file into your config folder.
-
-```bash
-php artisan vendor:publish --tag=flame-configuration
-```
-
-All done! :smile:
-
-## How it works
-
-> The flame.php configuration file already have an entry to put all your features in the App\Flame\Features namespace.
-
-Create a new feature using the following command:
-
-```bash
-php artisan make:feature
-```
-
-Select the "flame" namespace group, then create a "Manage Cars" feature, and the action "index".
-At the end, the route example that the command give you will be:
-
-```bash
-Route::get('manage-cars', '\App\Flame\Features\ManageCars\Controllers\ManageCarsController@index')
-     ->name('manage-cars.index');
-```
-
-##### :point_right: Copy+Paste this route example to your web.php file (or other route file you're using with web middleware).
-
-##### :floppy_disk: A new folder "ManagesCars" is created inside your "app\Flame\Features" folder.
-
-#### Feature "Manage Cars" file structure
-
-```bash
-  + ManageCars
-    + Controllers
-      > ManageCarsController.php
-      > WelcomeController.php
-    + Panels
-      > index.blade.php
-    + Twinkles
-      > welcome.blade.php
-```
-
-Let's now see what was scaffolded on each of those files. The magic starts :heart: !
-
-##### Controllers/ManageCarsController.php
+The service provider registers the custom transport with Laravel automatically. If you don’t use package discovery, register it manually:
 
 ```php
-class ManageCarsController extends Controller
-{
-    public function index()
-    {
-        return flame();
-    }
+// config/app.php
+'providers' => [
+    // ...
+    Brunocfalcao\ZeptoMailApiDriver\ZeptoMailApiDriverServiceProvider::class,
+],
 ```
 
- :tada: This is where you mapped your route file You just need to return the flame() helper so Flame will load your respective
-Panel and Twinkles for the "index" action. Meaning, if your Twinkles have the "index" action defined, they will run prior
-to the Panel content rendering.
+---
 
-> In case you don't have a Panel with the same name, then it will fall back to default.blade.php. If you have a Panel with this name, it will be loaded for all of your actions that don't have a specific Panel action. Double sweet!
+## Configuration
 
-##### Panels/welcome.blade.php
+### 1) Add your ZeptoMail credentials
 
-```blade
-@twinkle('welcome')
+```dotenv
+# .env
+MAIL_MAILER=zeptomail
+MAIL_FROM_ADDRESS=hello@yourdomain.com
+MAIL_FROM_NAME="Your App"
+
+ZEPTO_MAIL_KEY=your-zeptomail-api-key
 ```
 
-The Twinkle works like an "intelligent widget". It will render content defined in your Twinkes/ folder, given the argument passed.
-In this case, the Twinkle will load the "welcome.blade.php".
-
-BUT! More magic happens :heart: ...
-
-Before rendering the Twinkle, it will try to find its own respective controller (studly case) name. In our case we do have it
-in the Controllers/WelcomeController.php, so let's check it:
-
-##### Controllers/WelcomeController.php
+### 2) Add the service config
 
 ```php
-class WelcomeController extends Controller
+// config/services.php
+return [
+    // ...
+    'zeptomail' => [
+        'key' => env('ZEPTO_MAIL_KEY'),
+    ],
+];
+```
+
+### 3) Register the mailer
+
+```php
+// config/mail.php
+return [
+    // ...
+    'mailers' => [
+        // keep your existing mailers...
+        'smtp' => [/* ... */],
+
+        // add ZeptoMail
+        'zeptomail' => [
+            'transport' => 'zeptomail', // <-- registered by the service provider
+        ],
+    ],
+
+    // set a default if you want all mail to go via ZeptoMail
+    'default' => env('MAIL_MAILER', 'smtp'),
+];
+```
+
+> You can either set `MAIL_MAILER=zeptomail` globally, or select the mailer **per send** (see below).
+
+---
+
+## Usage
+
+You can use the driver exactly like any other Laravel mailer.
+
+### Send a quick message
+
+```php
+use Illuminate\Support\Facades\Mail;
+
+Mail::mailer('zeptomail')->raw('Hello from ZeptoMail', function ($message) {
+    $message->to('john@example.com')
+        ->subject('Test via ZeptoMail');
+});
+```
+
+If `MAIL_MAILER=zeptomail` is your default, a regular `Mail::raw()` works as usual.
+
+### Send a Mailable
+
+```php
+// App\Mail\WelcomeMail extends Illuminate\Mail\Mailable
+
+use Illuminate\Support\Facades\Mail;
+use App\Mail\WelcomeMail;
+
+Mail::mailer('zeptomail')
+    ->to('jane@example.com')
+    ->send(new WelcomeMail());
+```
+
+Or set the mailer inside the Mailable:
+
+```php
+public function __construct()
 {
-    public function index()
-    {
-        return ['text' => 'Hi there! This is a Twinkle!'];
-    }
+    $this->mailer('zeptomail');
+}
 ```
 
-Since there is the same action defined for the current route action running, it will use reflection to run the method and
-pass the data as an array. So you can then use it inside your Twinkle as a [Blade variable](https://laravel.com/docs/5.7/blade#displaying-data).
-Meaning on this case, it will run the "index" method and return the data to the Welcome Twinkle.
+### Attachments
 
-> The Twinkle methods also work with implicit binding. Meaning if you define your arguments from the route parameters they will be
-dynamically injected into your method arguments!
+Attachments are supported. Use standard Mailable APIs:
 
-## Current development status
-- [x] Finish core development.
-- [ ] Finish identified issues/improvements for Alpha release 0.1.x.
-- [ ] Close Alpha (0.1.x) release.
-- [ ] Finish identified issues/improvements for Beta release 0.2.x.
-- [ ] Close Beta (0.2.x) release.
-- [ ] Test coverage > 90%.
-- [ ] Finalize documentation.
-- [ ] Finalize video tutorials.
-- [ ] Release for General Public use.
-
-## Getting started
-
-Flame creates a demo route on your /flame url. You can try it and should see:
-<p align="center"><img src="https://flame.brunofalcao.me/assets/github/preview.jpg" width="400"></p>
-
-This means that you have can see the Demo feature located in the Brunocfalcao\Flame\Features\Demo namespace.
-
-## Creating your first Feature
-
-Simple as this. Just write the following command:
-
-```bash
-php artisan make:feature
+```php
+public function build()
+{
+    return $this->subject('Monthly Report')
+        ->view('emails.report')
+        ->attach(storage_path('app/reports/monthly.pdf'));
+}
 ```
+
+### Per-notification mailer
+
+```php
+use Illuminate\Notifications\Messages\MailMessage;
+
+public function toMail($notifiable)
+{
+    return (new MailMessage)
+        ->mailer('zeptomail')
+        ->subject('Security Alert')
+        ->line('A sign-in occurred on your account.');
+}
+```
+
+---
+
+## What this driver sends
+
+The current payload includes:
+
+- **From** (address & name)
+- **To** (one or more recipients)
+- **Subject**
+- **HTML body** & **Text body**
+- **Attachments** (as base64)
+
+> The transport converts your Laravel/Symfony `Email` into ZeptoMail’s JSON and posts it to the ZeptoMail API.
+
+---
+
+## Limitations (current scope)
+
+This first version intentionally focuses on a clean, minimal payload:
+
+- CC/BCC, Reply-To, custom headers are not mapped yet.
+- Inline/embedded attachments (CID images) are not mapped yet.
+- ZeptoMail template IDs, tags, or advanced analytics are not mapped.
+
+If you need any of the above, open an issue or PR and we can extend the payload mapper.
+
+---
+
+## Testing locally
+
+Use Laravel’s `Mail::fake()` for unit tests:
+
+```php
+use Illuminate\Support\Facades\Mail;
+
+Mail::fake();
+// exercise your code that sends mail...
+Mail::assertSent(App\Mail\WelcomeMail::class);
+```
+
+For manual verification in a dev environment, set `MAIL_MAILER=zeptomail` and send to a test inbox.
+Remember to use a **verified sender/domain** in ZeptoMail.
+
+---
+
+## Troubleshooting
+
+- **`cURL Error`**
+  Ensure `ext-curl` is enabled and outbound HTTPS is allowed. The driver enforces TLS 1.2.
+
+- **“Error sending email” (JSON response)**
+  The exception message includes the ZeptoMail error body—check credentials, sender/domain verification, and payload formatting.
+
+- **Queue workers**
+  If you queue mail, make sure your workers have `ext-curl` and the same env/config values as your web process.
+
+---
+
+## How it works (under the hood)
+
+- `ZeptoMailApiDriverServiceProvider` registers a new mail transport named **`zeptomail`**.
+- `ZeptoMailTransport` extends Symfony’s `AbstractTransport`, converts the `SentMessage` to a `SymfonyEmail`, builds the ZeptoMail JSON payload, and sends it via cURL to the ZeptoMail API endpoint.
+
+This keeps everything idiomatic to Laravel’s `Mail` facade and Symfony Mailer, so you can switch between mailers freely.
+
+---
+
+## Roadmap
+
+- CC/BCC/Reply-To mapping
+- Inline attachments (CID) support
+- ZeptoMail templates/tags/headers
+- Swap cURL to Laravel’s `Http` client with fakes for easier testing
+
+---
+
+## Security
+
+Never commit secrets. Keep your ZeptoMail API key in `.env` and rotate it periodically.
+
+---
+
+## Changelog
+
+See [CHANGELOG](CHANGELOG.md).
+
+---
 
 ## Contributing
 
-At the moment you don't need to contribute since Flame is still in development.
+PRs are welcome! Please include tests where practical and describe any payload changes clearly.
+
+---
+
+## Credits
+
+- [Bruno C. Falcão](https://github.com/brunocfalcao)
+- Inspired by the Laravel & Symfony Mailer ecosystems
+
+---
 
 ## License
 
-Waygou Flame is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+The MIT License (MIT). See [LICENSE](LICENSE.md) for details.
