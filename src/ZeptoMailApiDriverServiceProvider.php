@@ -13,32 +13,40 @@ class ZeptoMailApiDriverServiceProvider extends ServiceProvider
 {
     public function boot(): void
     {
-        Mail::extend('zeptomail', function ($app) {
+        // The closure receives the *mailer config array* (not the container).
+        Mail::extend('zeptomail', function (array $config = []) {
             /** @var HttpFactory $http */
-            $http = $app->make(HttpFactory::class);
+            $http = app(HttpFactory::class);
 
-            // Prefer config; fallback to env('ZEPTOMAIL_MAIL_KEY')
-            $key = (string) (config('services.zeptomail.mail_key') ?? '');
-            if (trim($key) === '') {
-                $key = (string) env('ZEPTOMAIL_MAIL_KEY', '');
-            }
+            // Resolve the key with precedence:
+            // 1) per-mailer config (config('mail.mailers.zeptomail.mail_key'))
+            // 2) services.zeptomail.mail_key
+            // 3) env('ZEPTOMAIL_MAIL_KEY')
+            $key = (string) ($config['mail_key']
+                ?? config('services.zeptomail.mail_key')
+                ?? env('ZEPTOMAIL_MAIL_KEY', ''));
 
-            // Fail fast if still empty
             if (trim($key) === '') {
                 throw new InvalidArgumentException(
                     "ZeptoMail driver misconfigured: mail key is empty. ".
-                    "Set 'services.zeptomail.mail_key' in config/services.php or define ".
-                    "ZEPTOMAIL_MAIL_KEY in your .env."
+                    "Set 'mail.mailers.zeptomail.mail_key' or 'services.zeptomail.mail_key', ".
+                    "or define ZEPTOMAIL_MAIL_KEY in your .env."
                 );
             }
+
+            // Allow per-mailer overrides; fallback to services.* defaults
+            $endpoint     = (string) ($config['endpoint']        ?? config('services.zeptomail.endpoint', 'https://api.zeptomail.com'));
+            $timeout      = (int)    ($config['timeout']         ?? config('services.zeptomail.timeout', 30));
+            $retries      = (int)    ($config['retries']         ?? config('services.zeptomail.retries', 2));
+            $retrySleepMs = (int)    ($config['retry_sleep_ms']  ?? config('services.zeptomail.retry_sleep_ms', 200));
 
             return new ZeptoMailTransport(
                 key: $key,
                 http: $http,
-                baseUrl: (string) config('services.zeptomail.endpoint', 'https://api.zeptomail.com'),
-                timeout: (int) config('services.zeptomail.timeout', 30),
-                retries: (int) config('services.zeptomail.retries', 2),
-                retrySleepMs: (int) config('services.zeptomail.retry_sleep_ms', 200),
+                baseUrl: $endpoint,
+                timeout: $timeout,
+                retries: $retries,
+                retrySleepMs: $retrySleepMs,
             );
         });
     }
