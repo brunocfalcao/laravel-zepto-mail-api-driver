@@ -155,7 +155,8 @@ final class ZeptoMailTransport extends AbstractTransport
                 ? '/v1.1/email/template/batch'   // batch templates
                 : '/v1.1/email/template';        // single template
 
-            $this->postToZepto($endpoint, $payload);
+            $response = $this->postToZepto($endpoint, $payload);
+            $this->storeResponseInMessage($message, $response);
 
             return;
         }
@@ -165,7 +166,8 @@ final class ZeptoMailTransport extends AbstractTransport
             ? '/v1.1/email/batch'   // batch sending (supports per-recipient merge_info in "to")
             : '/v1.1/email';        // single email (all recipients visible to each other)
 
-        $this->postToZepto($endpoint, $payload);
+        $response = $this->postToZepto($endpoint, $payload);
+        $this->storeResponseInMessage($message, $response);
     }
 
     /**
@@ -472,8 +474,9 @@ final class ZeptoMailTransport extends AbstractTransport
     /**
      * Perform the POST using Laravel's HTTP client (fakable).
      * Throws on non-2xx; also throws if Zepto returns an "error" object.
+     * Returns the response body for tracking purposes.
      */
-    protected function postToZepto(string $path, array $payload): void
+    protected function postToZepto(string $path, array $payload): array
     {
         $response = $this->http
             ->baseUrl($this->baseUrl)
@@ -491,6 +494,23 @@ final class ZeptoMailTransport extends AbstractTransport
         $body = $response->json();
         if (is_array($body) && Arr::has($body, 'error')) {
             throw new RuntimeException('Error sending email: '.json_encode($body));
+        }
+
+        return is_array($body) ? $body : [];
+    }
+
+    /**
+     * Store the Zeptomail API response in the SentMessage for Laravel's notification system to access.
+     * This allows the NotificationLogListener to extract the message_id for tracking.
+     */
+    protected function storeResponseInMessage(SentMessage $message, array $response): void
+    {
+        // Store the full Zeptomail response in the SentMessage's metadata
+        // Laravel's mail system will make this available via the NotificationSent event
+        $original = $message->getOriginalMessage();
+        if (method_exists($original, 'getHeaders')) {
+            $headers = $original->getHeaders();
+            $headers->addTextHeader('X-Zepto-Response', json_encode($response));
         }
     }
 }
