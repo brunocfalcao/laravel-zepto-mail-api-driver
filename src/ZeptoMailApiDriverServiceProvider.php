@@ -9,7 +9,7 @@ use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\ServiceProvider;
 use InvalidArgumentException;
 
-class ZeptoMailApiDriverServiceProvider extends ServiceProvider
+final class ZeptoMailApiDriverServiceProvider extends ServiceProvider
 {
     public function boot(): void
     {
@@ -26,19 +26,19 @@ class ZeptoMailApiDriverServiceProvider extends ServiceProvider
                 ?? config('services.zeptomail.mail_key')
                 ?? env('ZEPTOMAIL_MAIL_KEY', ''));
 
-            if (trim($key) === '') {
+            if (mb_trim($key) === '') {
                 throw new InvalidArgumentException(
-                    "ZeptoMail driver misconfigured: mail key is empty. ".
+                    'ZeptoMail driver misconfigured: mail key is empty. '.
                     "Set 'mail.mailers.zeptomail.mail_key' or 'services.zeptomail.mail_key', ".
-                    "or define ZEPTOMAIL_MAIL_KEY in your .env."
+                    'or define ZEPTOMAIL_MAIL_KEY in your .env.'
                 );
             }
 
             // Allow per-mailer overrides; fallback to services.* defaults
-            $endpoint     = (string) ($config['endpoint']        ?? config('services.zeptomail.endpoint', 'https://api.zeptomail.com'));
-            $timeout      = (int)    ($config['timeout']         ?? config('services.zeptomail.timeout', 30));
-            $retries      = (int)    ($config['retries']         ?? config('services.zeptomail.retries', 2));
-            $retrySleepMs = (int)    ($config['retry_sleep_ms']  ?? config('services.zeptomail.retry_sleep_ms', 200));
+            $endpoint = (string) ($config['endpoint'] ?? config('services.zeptomail.endpoint', 'https://api.zeptomail.com'));
+            $timeout = (int) ($config['timeout'] ?? config('services.zeptomail.timeout', 30));
+            $retries = (int) ($config['retries'] ?? config('services.zeptomail.retries', 2));
+            $retrySleepMs = (int) ($config['retry_sleep_ms'] ?? config('services.zeptomail.retry_sleep_ms', 200));
 
             return new ZeptoMailTransport(
                 key: $key,

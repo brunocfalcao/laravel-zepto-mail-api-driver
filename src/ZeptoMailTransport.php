@@ -1,4 +1,5 @@
 <?php
+
 // src/ZeptoMailTransport.php
 
 declare(strict_types=1);
@@ -8,6 +9,7 @@ namespace Brunocfalcao\ZeptoMailApiDriver;
 use Illuminate\Http\Client\Factory as HttpFactory;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Str;
+use RuntimeException;
 use Symfony\Component\Mailer\SentMessage;
 use Symfony\Component\Mailer\Transport\AbstractTransport;
 use Symfony\Component\Mime\Address;
@@ -35,7 +37,7 @@ use Symfony\Component\Mime\MessageConverter;
  *
  * Batch allows per-recipient merge_info and hides recipients from each other.
  */
-class ZeptoMailTransport extends AbstractTransport
+final class ZeptoMailTransport extends AbstractTransport
 {
     /** ZeptoMail API key (without the 'Zoho-enczapikey ' prefix) */
     protected string $key;
@@ -48,7 +50,9 @@ class ZeptoMailTransport extends AbstractTransport
 
     /** Default request options */
     protected int $timeout;
+
     protected int $retries;
+
     protected int $retrySleepMs;
 
     public function __construct(
@@ -61,11 +65,11 @@ class ZeptoMailTransport extends AbstractTransport
     ) {
         parent::__construct();
 
-        $this->key          = $key;
-        $this->http         = $http;
-        $this->baseUrl      = rtrim($baseUrl ?: (string) config('services.zeptomail.endpoint', 'https://api.zeptomail.com'), '/');
-        $this->timeout      = (int) ($timeout ?? config('services.zeptomail.timeout', 30));
-        $this->retries      = (int) ($retries ?? config('services.zeptomail.retries', 2));
+        $this->key = $key;
+        $this->http = $http;
+        $this->baseUrl = mb_rtrim($baseUrl ?: (string) config('services.zeptomail.endpoint', 'https://api.zeptomail.com'), '/');
+        $this->timeout = (int) ($timeout ?? config('services.zeptomail.timeout', 30));
+        $this->retries = (int) ($retries ?? config('services.zeptomail.retries', 2));
         $this->retrySleepMs = (int) ($retrySleepMs ?? config('services.zeptomail.retry_sleep_ms', 200));
     }
 
@@ -87,9 +91,9 @@ class ZeptoMailTransport extends AbstractTransport
 
         // Decide which API family to call based on presence of template key/alias and batch hints.
         $templateKeyOrAlias = $this->extractTemplateKeyOrAlias($email);  // header X-Zepto-Template or config
-        $globalMergeInfo    = $this->extractGlobalMergeInfo($email);     // header X-Zepto-MergeInfo (JSON)
-        $perRecipientMerge  = $this->extractPerRecipientMergeInfo($email); // header X-Zepto-PerRecipient-MergeInfo (JSON map)
-        $forceBatch         = $this->shouldForceBatch($email, $perRecipientMerge);
+        $globalMergeInfo = $this->extractGlobalMergeInfo($email);     // header X-Zepto-MergeInfo (JSON)
+        $perRecipientMerge = $this->extractPerRecipientMergeInfo($email); // header X-Zepto-PerRecipient-MergeInfo (JSON map)
+        $forceBatch = $this->shouldForceBatch($email, $perRecipientMerge);
 
         // Build payload following ZeptoMail schemas.
         $payload = $this->buildCommonPayload($email);
@@ -103,7 +107,7 @@ class ZeptoMailTransport extends AbstractTransport
         // Attachments & inline images (base64 OR file_cache_key)
         [$attachments, $inlineImages] = $this->extractAttachments($email);
         if ($attachments) {
-            $payload['attachments']   = $attachments;
+            $payload['attachments'] = $attachments;
         }
         if ($inlineImages) {
             $payload['inline_images'] = $inlineImages;
@@ -120,14 +124,14 @@ class ZeptoMailTransport extends AbstractTransport
 
         // Addressing: to/cc/bcc arrays in Zepto format
         // For batch, allow per-recipient merge_info; for single, plain list.
-        $to  = $this->mapToWithOptionalMerge($email->getTo(), $forceBatch ? $perRecipientMerge : []);
-        $cc  = $this->mapAddresses($email->getCc());
+        $to = $this->mapToWithOptionalMerge($email->getTo(), $forceBatch ? $perRecipientMerge : []);
+        $cc = $this->mapAddresses($email->getCc());
         $bcc = $this->mapAddresses($email->getBcc());
         if ($to) {
-            $payload['to']  = $to;
+            $payload['to'] = $to;
         }
         if ($cc) {
-            $payload['cc']  = $cc;
+            $payload['cc'] = $cc;
         }
         if ($bcc) {
             $payload['bcc'] = $bcc;
@@ -152,6 +156,7 @@ class ZeptoMailTransport extends AbstractTransport
                 : '/v1.1/email/template';        // single template
 
             $this->postToZepto($endpoint, $payload);
+
             return;
         }
 
@@ -173,13 +178,13 @@ class ZeptoMailTransport extends AbstractTransport
         return array_filter([
             'from' => $from ? [
                 'address' => $from->getAddress(),
-                'name'    => $from->getName(),
+                'name' => $from->getName(),
             ] : null,
-            'subject'  => $email->getSubject(),
+            'subject' => $email->getSubject(),
             // Zepto requires either htmlbody OR textbody (one of them). We pass both if available.
             'htmlbody' => $email->getHtmlBody(),
             'textbody' => $email->getTextBody(),
-        ], static fn ($v) => !is_null($v) && $v !== '');
+        ], static fn ($v) => ! is_null($v) && $v !== '');
     }
 
     /**
@@ -192,7 +197,7 @@ class ZeptoMailTransport extends AbstractTransport
             return [
                 'email_address' => [
                     'address' => $a->getAddress(),
-                    'name'    => $a->getName(),
+                    'name' => $a->getName(),
                 ],
             ];
         }, $addresses));
@@ -209,7 +214,7 @@ class ZeptoMailTransport extends AbstractTransport
             $item = [
                 'email_address' => [
                     'address' => $a->getAddress(),
-                    'name'    => $a->getName(),
+                    'name' => $a->getName(),
                 ],
             ];
 
@@ -229,7 +234,7 @@ class ZeptoMailTransport extends AbstractTransport
         return array_values(array_map(static function (Address $a) {
             return [
                 'address' => $a->getAddress(),
-                'name'    => $a->getName(),
+                'name' => $a->getName(),
             ];
         }, $replyTo));
     }
@@ -239,36 +244,36 @@ class ZeptoMailTransport extends AbstractTransport
      */
     protected function extractAttachments(SymfonyEmail $email): array
     {
-        $attachments  = [];
+        $attachments = [];
         $inlineImages = [];
 
         foreach (iterator_to_array($email->getAttachments()) as $part) {
             /** @var \Symfony\Component\Mime\Part\DataPart $part */
             $filename = method_exists($part, 'getFilename') ? $part->getFilename() : null;
             $mimeType = $part->getMediaType().'/'.$part->getMediaSubtype();
-            $raw      = (string) $part->getBody();
-            $b64      = base64_encode($raw);
+            $raw = (string) $part->getBody();
+            $b64 = base64_encode($raw);
 
-            $headers  = $part->getPreparedHeaders();
-            $cd       = $headers->get('Content-Disposition');
-            $cidH     = $headers->get('Content-ID');
+            $headers = $part->getPreparedHeaders();
+            $cd = $headers->get('Content-Disposition');
+            $cidH = $headers->get('Content-ID');
 
             $isInline = false;
-            if ($cd && Str::contains(strtolower((string) $cd->getBodyAsString()), 'inline')) {
+            if ($cd && Str::contains(mb_strtolower((string) $cd->getBodyAsString()), 'inline')) {
                 $isInline = true;
             }
 
             $cid = null;
             if ($cidH) {
-                $cid = trim((string) $cidH->getBodyAsString(), '<>');
+                $cid = mb_trim((string) $cidH->getBodyAsString(), '<>');
                 $isInline = true;
             }
 
             $payload = array_filter([
-                'content'   => $b64,
+                'content' => $b64,
                 'mime_type' => $mimeType,
-                'name'      => $filename,
-            ], fn ($v) => !is_null($v) && $v !== '');
+                'name' => $filename,
+            ], fn ($v) => ! is_null($v) && $v !== '');
 
             if ($isInline) {
                 if ($cid) {
@@ -293,19 +298,20 @@ class ZeptoMailTransport extends AbstractTransport
     {
         $h = $email->getHeaders();
         if ($h->has('X-Zepto-Template')) {
-            $val = trim((string) $h->get('X-Zepto-Template')->getBodyAsString());
+            $val = mb_trim((string) $h->get('X-Zepto-Template')->getBodyAsString());
             if ($val !== '') {
                 // Allow users to pass either a key or an alias; Zepto accepts either field name.
                 $field = Str::startsWith($val, 'ea') ? 'template_key' : 'template_alias';
+
                 return [$field => $val];
             }
         }
 
-        $key   = (string) (config('services.zeptomail.template_key')   ?? '');
+        $key = (string) (config('services.zeptomail.template_key') ?? '');
         $alias = (string) (config('services.zeptomail.template_alias') ?? '');
 
         if ($key !== '') {
-            return ['template_key'   => $key];
+            return ['template_key' => $key];
         }
         if ($alias !== '') {
             return ['template_alias' => $alias];
@@ -321,12 +327,13 @@ class ZeptoMailTransport extends AbstractTransport
     protected function extractGlobalMergeInfo(SymfonyEmail $email): ?array
     {
         $h = $email->getHeaders();
-        if (!$h->has('X-Zepto-MergeInfo')) {
+        if (! $h->has('X-Zepto-MergeInfo')) {
             return null;
         }
 
         $json = (string) $h->get('X-Zepto-MergeInfo')->getBodyAsString();
         $decoded = json_decode($json, true);
+
         return is_array($decoded) ? $decoded : null;
     }
 
@@ -338,12 +345,13 @@ class ZeptoMailTransport extends AbstractTransport
     protected function extractPerRecipientMergeInfo(SymfonyEmail $email): array
     {
         $h = $email->getHeaders();
-        if (!$h->has('X-Zepto-PerRecipient-MergeInfo')) {
+        if (! $h->has('X-Zepto-PerRecipient-MergeInfo')) {
             return [];
         }
 
         $json = (string) $h->get('X-Zepto-PerRecipient-MergeInfo')->getBodyAsString();
         $decoded = json_decode($json, true);
+
         return is_array($decoded) ? $decoded : [];
     }
 
@@ -356,13 +364,14 @@ class ZeptoMailTransport extends AbstractTransport
     {
         $h = $email->getHeaders();
         if ($h->has('X-Zepto-Bounce-Address')) {
-            $val = trim((string) $h->get('X-Zepto-Bounce-Address')->getBodyAsString());
+            $val = mb_trim((string) $h->get('X-Zepto-Bounce-Address')->getBodyAsString());
             if ($val !== '') {
                 return $val;
             }
         }
 
         $cfg = (string) (config('services.zeptomail.bounce_address') ?? '');
+
         return $cfg !== '' ? $cfg : null;
     }
 
@@ -376,7 +385,7 @@ class ZeptoMailTransport extends AbstractTransport
     {
         $h = $email->getHeaders();
         if ($h->has('X-Zepto-Batch')) {
-            $val = strtolower(trim((string) $h->get('X-Zepto-Batch')->getBodyAsString()));
+            $val = mb_strtolower(mb_trim((string) $h->get('X-Zepto-Batch')->getBodyAsString()));
             if (in_array($val, ['1', 'true', 'yes', 'on'], true)) {
                 return true;
             }
@@ -386,7 +395,7 @@ class ZeptoMailTransport extends AbstractTransport
             return true;
         }
 
-        return !empty($perRecipientMerge);
+        return ! empty($perRecipientMerge);
     }
 
     /**
@@ -400,9 +409,9 @@ class ZeptoMailTransport extends AbstractTransport
     {
         $h = $email->getHeaders();
 
-        $trackOpens  = $h->has('X-Zepto-Track-Opens')  ? filter_var((string) $h->get('X-Zepto-Track-Opens')->getBodyAsString(), FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) : null;
+        $trackOpens = $h->has('X-Zepto-Track-Opens') ? filter_var((string) $h->get('X-Zepto-Track-Opens')->getBodyAsString(), FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) : null;
         $trackClicks = $h->has('X-Zepto-Track-Clicks') ? filter_var((string) $h->get('X-Zepto-Track-Clicks')->getBodyAsString(), FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) : null;
-        $clientRef   = $h->has('X-Zepto-Client-Reference') ? trim((string) $h->get('X-Zepto-Client-Reference')->getBodyAsString()) : null;
+        $clientRef = $h->has('X-Zepto-Client-Reference') ? mb_trim((string) $h->get('X-Zepto-Client-Reference')->getBodyAsString()) : null;
 
         if (is_null($trackOpens)) {
             $trackOpens = config('services.zeptomail.track_opens');
@@ -414,13 +423,13 @@ class ZeptoMailTransport extends AbstractTransport
             $clientRef = config('services.zeptomail.client_reference');
         }
 
-        if (!is_null($trackOpens)) {
-            $payload['track_opens']  = (bool) $trackOpens;
+        if (! is_null($trackOpens)) {
+            $payload['track_opens'] = (bool) $trackOpens;
         }
-        if (!is_null($trackClicks)) {
+        if (! is_null($trackClicks)) {
             $payload['track_clicks'] = (bool) $trackClicks;
         }
-        if (!empty($clientRef)) {
+        if (! empty($clientRef)) {
             $payload['client_reference'] = (string) $clientRef;
         }
     }
@@ -432,11 +441,11 @@ class ZeptoMailTransport extends AbstractTransport
     protected function extractCustomHeaders(SymfonyEmail $email): array
     {
         $exclude = [
-            'From','To','Cc','Bcc','Reply-To','Subject',
-            'MIME-Version','Content-Type','Content-Transfer-Encoding',
+            'From', 'To', 'Cc', 'Bcc', 'Reply-To', 'Subject',
+            'MIME-Version', 'Content-Type', 'Content-Transfer-Encoding',
             // our control headers
-            'X-Zepto-Template','X-Zepto-MergeInfo','X-Zepto-PerRecipient-MergeInfo',
-            'X-Zepto-Batch','X-Zepto-Track-Opens','X-Zepto-Track-Clicks','X-Zepto-Client-Reference',
+            'X-Zepto-Template', 'X-Zepto-MergeInfo', 'X-Zepto-PerRecipient-MergeInfo',
+            'X-Zepto-Batch', 'X-Zepto-Track-Opens', 'X-Zepto-Track-Clicks', 'X-Zepto-Client-Reference',
             'X-Zepto-Bounce-Address',
         ];
 
@@ -446,7 +455,7 @@ class ZeptoMailTransport extends AbstractTransport
             if (in_array($name, $exclude, true)) {
                 continue;
             }
-            $val = trim((string) $header->getBodyAsString());
+            $val = mb_trim((string) $header->getBodyAsString());
             if ($val === '') {
                 continue;
             }
@@ -481,7 +490,7 @@ class ZeptoMailTransport extends AbstractTransport
 
         $body = $response->json();
         if (is_array($body) && Arr::has($body, 'error')) {
-            throw new \RuntimeException('Error sending email: '.json_encode($body));
+            throw new RuntimeException('Error sending email: '.json_encode($body));
         }
     }
 }
