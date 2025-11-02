@@ -481,26 +481,16 @@ final class ZeptoMailTransport extends AbstractTransport
         // Build headers to send
         $requestHeaders = [
             'Authorization' => 'Zoho-enczapikey '.$this->key,
-            'Accept' => 'application/json',
-            'Content-Type' => 'application/json',
+            'User-Agent' => 'Martingalian/1.0 Laravel/'.app()->version().' PHP/'.PHP_VERSION,
         ];
 
         $response = $this->http
-            ->baseUrl($this->baseUrl)
-            ->acceptJson()
             ->asJson()
+            ->acceptJson()
             ->withHeaders($requestHeaders)
             ->timeout($this->timeout)
             ->retry($this->retries, $this->retrySleepMs)
-            ->post($path, $payload);
-
-        if (! $response->successful()) {
-            \Log::error('[ZEPTOMAIL] API Error Response', [
-                'status' => $response->status(),
-                'body' => $response->body(),
-                'json' => $response->json(),
-            ]);
-        }
+            ->post($this->baseUrl.$path, $payload);
 
         $response->throw();
 
