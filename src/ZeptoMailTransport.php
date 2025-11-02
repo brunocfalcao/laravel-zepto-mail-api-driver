@@ -178,10 +178,10 @@ final class ZeptoMailTransport extends AbstractTransport
         $from = $email->getFrom()[0] ?? null;
 
         return array_filter([
-            'from' => $from ? [
+            'from' => $from ? array_filter([
                 'address' => $from->getAddress(),
                 'name' => $from->getName(),
-            ] : null,
+            ], static fn ($v) => ! is_null($v) && $v !== '') : null,
             'subject' => $email->getSubject(),
             // Zepto requires either htmlbody OR textbody (one of them). We pass both if available.
             'htmlbody' => $email->getHtmlBody(),
@@ -197,10 +197,10 @@ final class ZeptoMailTransport extends AbstractTransport
     {
         return array_values(array_map(static function (Address $a) {
             return [
-                'email_address' => [
+                'email_address' => array_filter([
                     'address' => $a->getAddress(),
                     'name' => $a->getName(),
-                ],
+                ], static fn ($v) => ! is_null($v) && $v !== ''),
             ];
         }, $addresses));
     }
@@ -214,10 +214,10 @@ final class ZeptoMailTransport extends AbstractTransport
     {
         return array_values(array_map(function (Address $a) use ($perRecipientMerge) {
             $item = [
-                'email_address' => [
+                'email_address' => array_filter([
                     'address' => $a->getAddress(),
                     'name' => $a->getName(),
-                ],
+                ], static fn ($v) => ! is_null($v) && $v !== ''),
             ];
 
             if (isset($perRecipientMerge[$a->getAddress()]) && is_array($perRecipientMerge[$a->getAddress()])) {
@@ -234,10 +234,10 @@ final class ZeptoMailTransport extends AbstractTransport
     protected function mapReplyTo(array $replyTo): array
     {
         return array_values(array_map(static function (Address $a) {
-            return [
+            return array_filter([
                 'address' => $a->getAddress(),
                 'name' => $a->getName(),
-            ];
+            ], static fn ($v) => ! is_null($v) && $v !== '');
         }, $replyTo));
     }
 
