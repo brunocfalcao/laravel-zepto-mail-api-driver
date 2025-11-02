@@ -474,17 +474,22 @@ final class ZeptoMailTransport extends AbstractTransport
     /**
      * Perform the POST using Laravel's HTTP client (fakable).
      * Throws on non-2xx; also throws if Zepto returns an "error" object.
-     * Returns the response body for tracking purposes.
+     * Returns the response body and request headers for tracking purposes.
      */
     protected function postToZepto(string $path, array $payload): array
     {
+        // Build headers to send
+        $requestHeaders = [
+            'Authorization' => 'Zoho-enczapikey '.$this->key,
+            'Accept' => 'application/json',
+            'Content-Type' => 'application/json',
+        ];
+
         $response = $this->http
             ->baseUrl($this->baseUrl)
             ->acceptJson()
             ->asJson()
-            ->withHeaders([
-                'Authorization' => 'Zoho-enczapikey '.$this->key,
-            ])
+            ->withHeaders($requestHeaders)
             ->timeout($this->timeout)
             ->retry($this->retries, $this->retrySleepMs)
             ->post($path, $payload);
@@ -496,21 +501,34 @@ final class ZeptoMailTransport extends AbstractTransport
             throw new RuntimeException('Error sending email: '.json_encode($body));
         }
 
-        return is_array($body) ? $body : [];
+        // Return both response body and request headers for tracking
+        return [
+            'response' => is_array($body) ? $body : [],
+            'request_headers' => $requestHeaders,
+        ];
     }
 
     /**
-     * Store the Zeptomail API response in the SentMessage for Laravel's notification system to access.
-     * This allows the NotificationLogListener to extract the message_id for tracking.
+     * Store the Zeptomail API response and request headers in the SentMessage for Laravel's notification system to access.
+     * This allows the NotificationLogListener to extract the message_id and request headers for tracking.
      */
-    protected function storeResponseInMessage(SentMessage $message, array $response): void
+    protected function storeResponseInMessage(SentMessage $message, array $data): void
     {
-        // Store the full Zeptomail response in the SentMessage's metadata
+        // Store the full Zeptomail response and request headers in the SentMessage's metadata
         // Laravel's mail system will make this available via the NotificationSent event
         $original = $message->getOriginalMessage();
         if (method_exists($original, 'getHeaders')) {
             $headers = $original->getHeaders();
-            $headers->addTextHeader('X-Zepto-Response', json_encode($response));
+
+            // Store response body
+            if (isset($data['response'])) {
+                $headers->addTextHeader('X-Zepto-Response', json_encode($data['response']));
+            }
+
+            // Store request headers sent to Zeptomail API
+            if (isset($data['request_headers'])) {
+                $headers->addTextHeader('X-Zepto-Request-Headers', json_encode($data['request_headers']));
+            }
         }
     }
 }
