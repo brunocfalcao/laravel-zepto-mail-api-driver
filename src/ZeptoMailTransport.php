@@ -494,6 +494,14 @@ final class ZeptoMailTransport extends AbstractTransport
             ->retry($this->retries, $this->retrySleepMs)
             ->post($path, $payload);
 
+        if (! $response->successful()) {
+            \Log::error('[ZEPTOMAIL] API Error Response', [
+                'status' => $response->status(),
+                'body' => $response->body(),
+                'json' => $response->json(),
+            ]);
+        }
+
         $response->throw();
 
         $body = $response->json();
