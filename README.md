@@ -1,7 +1,14 @@
 # Laravel ZeptoMail API Driver
 
-[![Latest Version on Packagist](https://img.shields.io/packagist/v/brunocfalcao/laravel-zeptomail-driver.svg?style=flat-square)](https://packagist.org/packages/brunocfalcao/laravel-zeptomail-driver)
-[![Total Downloads](https://img.shields.io/packagist/dt/brunocfalcao/laravel-zeptomail-driver.svg?style=flat-square)](https://packagist.org/packages/brunocfalcao/laravel-zeptomail-driver)
+## Changes in v1.1.1
+
+This documentation release corrects the Composer package name, records the
+release history and adds shared project guidance. Mail transport behavior is
+unchanged.
+
+
+[![Latest Version on Packagist](https://img.shields.io/packagist/v/brunocfalcao/laravel-zepto-mail-api-driver.svg?style=flat-square)](https://packagist.org/packages/brunocfalcao/laravel-zepto-mail-api-driver)
+[![Total Downloads](https://img.shields.io/packagist/dt/brunocfalcao/laravel-zepto-mail-api-driver.svg?style=flat-square)](https://packagist.org/packages/brunocfalcao/laravel-zepto-mail-api-driver)
 
 A lightweight **Symfony Mailer transport** for Laravel that delivers mail via **ZeptoMail’s HTTP API** (no SMTP).
 It plugs into Laravel’s `mailers` and supports **CC/BCC/Reply-To**, **attachments & inline (CID) images**, **single & batch sending**, **template sending (single & batch)**, **custom MIME headers**, **open/click tracking flags**, and a **client reference**.
@@ -12,7 +19,7 @@ Under the hood it uses Laravel’s `Http` client, so you can **`Http::fake()`** 
 ## Requirements
 
 - PHP 8.1+
-- Laravel 9.x / 10.x / 11.x (Symfony Mailer)
+- Laravel 10.x / 11.x / 12.x / 13.x (Symfony Mailer)
 - Outbound HTTPS and TLS 1.2 available
 - A ZeptoMail account & API key (use the correct **region endpoint**, e.g. `.com` or `.eu`)
 
@@ -23,7 +30,7 @@ Under the hood it uses Laravel’s `Http` client, so you can **`Http::fake()`** 
 Install via Composer:
 
 ```bash
-composer require brunocfalcao/laravel-zeptomail-driver
+composer require brunocfalcao/laravel-zepto-mail-api-driver
 ```
 
 If you don’t use package discovery, register the provider manually:
